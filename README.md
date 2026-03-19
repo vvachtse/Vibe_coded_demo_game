@@ -1,6 +1,12 @@
 # Vibe_coded_demo_game
 This repository includes a small game inspired by the original Pokemon and Final Fantasy games. The whole demo for the game is made using vibe coding. The aim is to showcase how to interact with LLMs/Agents (Henceforth shorthanded as simply LLMs) and perform prompt engineering in order to learn through experience how to start up with video game design.
 
+# Tools_used 
+
+- Copilot
+- Microsoft edge ( ideally you want to try multiple browsers)
+- Visual Studio Code
+
 # Creative_process
 
 Using Copilot (Smart mode) we initially request from the LLM to design a prompt for an LLM to generate code for a Pokemon/FF like small game that runs on the browser. It is important to specify some requests. 
@@ -32,3 +38,8 @@ When the LLM starts to provide you the code in chunks it means that it is nearin
 
 # The Next Steps
 After translating the html code into a different tool, use your prefered IDE and start fleshing out your own games. This small repo is purely for educaticational purposes.
+
+# Generating the Pygame version
+
+The first generation of pygames code seems a lot like a downgrade for the initial version of the demo. This is because the LLM is always trying to cut corners for the most complex codes. We will need to once again probe it to enrich the initial seed version to partly match the capabilities of the HTML version ( or code it ourselves - more ethical !)
+
