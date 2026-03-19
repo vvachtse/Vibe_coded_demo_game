@@ -26,4 +26,9 @@ C. Ask a different LLM to explain the code
 
 Idelly one should do all 3 in order to better understand the philosophy behind OOP for game development. You may then try to tinker with those values in order to make changes to the outcome of the game (for example change the random encounter frequency).  It is strongly advised that once the code generated exceeds the limits of messages it would be the ideal point to "translate" the code into Unity/Unreal Engine / Pygames or any other game development tool/language in order to be able to work with it extensively, as most adjustments by LLMs will be focused on specific aspects of the code only. 
 
+! IMPORTANT ! 
+
+When the LLM starts to provide you the code in chunks it means that it is nearing its capabilities therefore form that point on you should start hybrid code development.
+
 # The Next Steps
+After translating the html code into a different tool, use your prefered IDE and start fleshing out your own games. This small repo is purely for educaticational purposes.
