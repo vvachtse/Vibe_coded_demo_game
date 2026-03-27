@@ -1,0 +1,919 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Retro RPG — NPC Complete</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{--bg:#071018;--panel:rgba(0,0,0,0.9);--accent:#ffd24d;--text:#eaeaea;--muted:#9aa3b2}
+  html,body{height:100%;margin:0;background:var(--bg);font-family:monospace;color:var(--text);display:flex;align-items:center;justify-content:center}
+  #wrap{display:flex;gap:12px;padding:12px;width:100%;box-sizing:border-box}
+  canvas{image-rendering:pixelated;border:10px solid #05060a;background:#071018;max-width:100%;height:auto}
+  #panel{width:360px;background:var(--panel);padding:12px;border-radius:8px}
+  .row{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .btn{background:#0b0b0b;border:1px solid rgba(255,255,255,0.06);color:var(--text);padding:6px 8px;cursor:pointer;border-radius:4px}
+  label{display:block;margin-top:8px;color:#cfd8e3}
+  input,textarea,select{width:100%;padding:6px;border-radius:4px;background:#0b0b0b;color:#eee;border:1px solid rgba(255,255,255,0.04)}
+  .muted{color:var(--muted);font-size:12px;margin-top:8px}
+  #diag{margin-top:10px;color:#f88;font-size:13px;white-space:pre-wrap}
+  @media (max-width:900px){ #panel{display:none} }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="1024" height="768" aria-label="Game canvas"></canvas>
+
+  <div id="panel">
+    <h3>Retro RPG — NPC Complete</h3>
+
+    <div class="row">
+      <button id="saveBtn" class="btn">P Save</button>
+      <button id="loadBtn" class="btn">L Load</button>
+      <button id="pcBtn" class="btn">PC</button>
+      <button id="editorBtn" class="btn">Editor (M)</button>
+    </div>
+
+    <label>Palette</label>
+    <select id="palette">
+      <option value="default">Default</option>
+      <option value="night">Night</option>
+      <option value="desert">Desert</option>
+      <option value="snow">Snow</option>
+    </select>
+
+    <label>Tool</label>
+    <div class="row">
+      <button id="toolPaint" class="btn">Paint</button>
+      <button id="toolErase" class="btn">Erase</button>
+    </div>
+
+    <label>Tile index (0–7)</label>
+    <input id="tileIndex" type="number" min="0" max="7" value="0">
+
+    <label>Event editor (right-click tile/object)</label>
+    <input id="eventTarget" type="text" readonly placeholder="target id">
+    <textarea id="eventScript" rows="4" placeholder='[{"type":"dialog","text":"Hello!"}]'></textarea>
+    <div class="row">
+      <button id="saveEvent" class="btn">Save Event</button>
+      <button id="clearEvent" class="btn">Clear Event</button>
+    </div>
+
+    <label style="margin-top:10px">Audio</label>
+    <div class="row">
+      <button id="musicPlay" class="btn">Play</button>
+      <button id="musicPause" class="btn">Pause</button>
+      <button id="musicMute" class="btn">Mute</button>
+    </div>
+    <label>Tempo</label>
+    <input id="tempo" type="range" min="60" max="180" value="120">
+    <label>Music Vol</label>
+    <input id="musicVol" type="range" min="0" max="1" step="0.01" value="0.18">
+    <label>SFX Vol</label>
+    <input id="sfxVol" type="range" min="0" max="1" step="0.01" value="0.9">
+
+    <div id="diag"></div>
+    <div class="muted">Controls: Arrow keys Move • Z Confirm • X Menu/Back • M Editor • P Save • L Load</div>
+  </div>
+</div>
+
+<script>
+/*
+  Retro RPG — NPC Complete
+  - Encounter rate 1/20
+  - NPC sprite system (4-dir, 4-frame)
+  - Idle (blink + bob), emotion bubbles
+  - Simple wandering + day schedule
+*/
+
+/* === Utilities === */
+const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
+const rand = n => Math.floor(Math.random()*n);
+const hexToRgb = hex => { const h=hex.replace('#',''); return {r:parseInt(h.slice(0,2),16),g:parseInt(h.slice(2,4),16),b:parseInt(h.slice(4,6),16)}; };
+
+/* === DOM and Canvas Setup === */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext && canvas.getContext('2d');
+if(!ctx) throw new Error('2D context unavailable');
+const diagEl = document.getElementById('diag');
+const report = msg => { console.log(msg); diagEl.textContent = ''; };
+const reportError = e => { console.error(e); diagEl.textContent = 'Error: ' + (e && e.message ? e.message : String(e)); };
+
+/* === Tileset and Palettes === */
+const TILE = 48, TILE_PIX = 6, TILESET_COLS = 4;
+const baseIndexColors = {
+  0:[0,0,0,0],1:[34,139,34,255],2:[107,107,107,255],3:[196,68,68,255],
+  4:[139,90,43,255],5:[255,210,77,255],6:[0,255,255,255],7:[58,108,255,255]
+};
+const indexedTiles = [
+  ["......",".1111.",".1..1.",".1..1.",".1111.","......"],
+  ["......",".2222.",".2##2.",".2##2.",".2222.","......"],
+  ["......","..333.",".3333.",".3..3.",".3333.","......"],
+  ["......","..333.",".3333.",".3..3.",".3333.","......"],
+  ["......","..111.",".1111.",".1111.","..444.","......"],
+  ["......","..555.",".5555.",".5555.","..555.","......"],
+  ["......","..666.",".6666.",".6666.",".6666.","......"],
+  ["......",".7777.",".7..7.",".7..7.",".7777.","......"]
+];
+const tilesetIndexCanvas = document.createElement('canvas');
+tilesetIndexCanvas.width = TILESET_COLS * TILE_PIX;
+tilesetIndexCanvas.height = 2 * TILE_PIX;
+const tctx = tilesetIndexCanvas.getContext('2d');
+
+(function buildIndexed(){
+  tctx.clearRect(0,0,tilesetIndexCanvas.width, tilesetIndexCanvas.height);
+  for(let i=0;i<indexedTiles.length;i++){
+    const col = i % TILESET_COLS, row = Math.floor(i / TILESET_COLS);
+    const ox = col * TILE_PIX, oy = row * TILE_PIX;
+    const grid = indexedTiles[i];
+    for(let r=0;r<grid.length;r++){
+      for(let c=0;c<grid[r].length;c++){
+        const ch = grid[r][c];
+        if(ch === '.') continue;
+        const idx = parseInt(ch,10);
+        const rgba = baseIndexColors[idx];
+        if(!rgba) continue;
+        tctx.fillStyle = `rgba(${rgba[0]},${rgba[1]},${rgba[2]},${rgba[3]/255})`;
+        tctx.fillRect(ox + c, oy + r, 1, 1);
+      }
+    }
+  }
+})();
+
+const palettes = {
+  default:{1:'#3cb043',2:'#6b6b6b',3:'#c44',4:'#8b5a2b',5:'#ffd24d',6:'#0ff',7:'#3a6cff'},
+  night:{1:'#2a5f2a',2:'#3a3a3a',3:'#6b2a2a',4:'#5a3f2a',5:'#e6c94d',6:'#0aa',7:'#1f3f7f'},
+  desert:{1:'#c9b97a',2:'#8b7a6b',3:'#b24a2a',4:'#7a5a2a',5:'#ffd24d',6:'#7ad',7:'#b0d0ff'},
+  snow:{1:'#cfead6',2:'#bdbdbd',3:'#a84a4a',4:'#8b6b5a',5:'#fff1b0',6:'#bff',7:'#cfe6ff'}
+};
+const recoloredCache = {};
+
+function recolorTileset(name){
+  if(recoloredCache[name]) return recoloredCache[name];
+  const pal = palettes[name] || palettes.default;
+  const src = tctx.getImageData(0,0,tilesetIndexCanvas.width, tilesetIndexCanvas.height);
+  const out = document.createElement('canvas'); out.width = src.width; out.height = src.height;
+  const octx = out.getContext('2d'); const dst = octx.createImageData(src.width, src.height);
+  for(let i=0;i<src.data.length;i+=4){
+    const r = src.data[i], g = src.data[i+1], b = src.data[i+2], a = src.data[i+3];
+    if(a === 0){ dst.data[i]=0; dst.data[i+1]=0; dst.data[i+2]=0; dst.data[i+3]=0; continue; }
+    let matchedIndex = null;
+    for(const idx in baseIndexColors){
+      const col = baseIndexColors[idx];
+      if(!col || col.length < 3) continue;
+      if(col[0] === r && col[1] === g && col[2] === b){ matchedIndex = parseInt(idx,10); break; }
+    }
+    if(matchedIndex === null){ dst.data[i]=r; dst.data[i+1]=g; dst.data[i+2]=b; dst.data[i+3]=a; }
+    else {
+      const hex = (pal && pal[matchedIndex]) ? pal[matchedIndex] : null;
+      if(hex){ const rgb = hexToRgb(hex); dst.data[i]=rgb.r; dst.data[i+1]=rgb.g; dst.data[i+2]=rgb.b; dst.data[i+3]=255; }
+      else { dst.data[i]=r; dst.data[i+1]=g; dst.data[i+2]=b; dst.data[i+3]=a; }
+    }
+  }
+  octx.putImageData(dst,0,0);
+  recoloredCache[name] = out;
+  return out;
+}
+for(const p in palettes) recolorTileset(p);
+
+/* === Sprite sheet (player) === */
+const FRAME_W = 16, FRAME_H = 24, SHEET_COLS = 4, SHEET_ROWS = 4;
+const sheetCanvas = document.createElement('canvas'); sheetCanvas.width = FRAME_W * SHEET_COLS; sheetCanvas.height = FRAME_H * SHEET_ROWS;
+const sctx = sheetCanvas.getContext('2d');
+function drawPlayerFrame(ctxLocal, frame, dir){
+  ctxLocal.clearRect(0,0,FRAME_W,FRAME_H);
+  ctxLocal.fillStyle='#f1c27d'; ctxLocal.fillRect(6,2,4,4);
+  ctxLocal.fillStyle='#2b1b0b'; ctxLocal.fillRect(6,1,4,1);
+  ctxLocal.fillStyle='#2b6fb3'; ctxLocal.fillRect(5,6,6,6);
+  ctxLocal.fillStyle='#3a2b1b'; ctxLocal.fillRect(5,12,3,3); ctxLocal.fillRect(8,12,3,3);
+  const armOffset = (frame%2===0)?-1:1;
+  if(dir===0){ ctxLocal.fillRect(4+armOffset,7,2,4); ctxLocal.fillRect(10-armOffset,7,2,4); }
+  else if(dir===3){ ctxLocal.fillRect(4+armOffset,4,2,4); ctxLocal.fillRect(10-armOffset,4,2,4); }
+  else { ctxLocal.fillRect(4,7,2,4); ctxLocal.fillRect(10,7,2,4); }
+}
+(function buildSheet(){
+  for(let dir=0;dir<SHEET_ROWS;dir++){
+    for(let f=0;f<SHEET_COLS;f++){
+      const ox = f*FRAME_W, oy = dir*FRAME_H;
+      const tmp = document.createElement('canvas'); tmp.width=FRAME_W; tmp.height=FRAME_H;
+      const t = tmp.getContext('2d'); drawPlayerFrame(t,f,dir);
+      sctx.drawImage(tmp,ox,oy);
+    }
+  }
+})();
+const sheetImage = new Image(); sheetImage.src = sheetCanvas.toDataURL();
+
+/* === NPC sprite system === */
+const npcSheets = {};
+const npcIdleState = {};
+const npcEmotion = {};
+const npcWanderState = {};
+
+function buildNpcSprite(name, colors) {
+  const canvas = document.createElement('canvas');
+  canvas.width = FRAME_W * SHEET_COLS;
+  canvas.height = FRAME_H * SHEET_ROWS;
+  const c = canvas.getContext('2d');
+
+  for (let dir = 0; dir < SHEET_ROWS; dir++) {
+    for (let f = 0; f < SHEET_COLS; f++) {
+      const ox = f * FRAME_W;
+      const oy = dir * FRAME_H;
+
+      const tmp = document.createElement('canvas');
+      tmp.width = FRAME_W;
+      tmp.height = FRAME_H;
+      const t = tmp.getContext('2d');
+
+      drawNpcFrame(t, f, dir, colors);
+      c.drawImage(tmp, ox, oy);
+    }
+  }
+
+  npcSheets[name] = new Image();
+  npcSheets[name].src = canvas.toDataURL();
+}
+
+function drawNpcFrame(ctxLocal, frame, dir, colors) {
+  ctxLocal.clearRect(0,0,FRAME_W,FRAME_H);
+  ctxLocal.fillStyle = colors.skin; ctxLocal.fillRect(6,2,4,4);
+  ctxLocal.fillStyle = colors.hair; ctxLocal.fillRect(6,1,4,1);
+  ctxLocal.fillStyle = colors.shirt; ctxLocal.fillRect(5,6,6,6);
+  ctxLocal.fillStyle = colors.pants; ctxLocal.fillRect(5,12,3,3); ctxLocal.fillRect(8,12,3,3);
+  const armOffset = (frame % 2 === 0) ? -1 : 1;
+  ctxLocal.fillStyle = colors.skin;
+  if (dir === 0) {
+    ctxLocal.fillRect(4 + armOffset, 7, 2, 4);
+    ctxLocal.fillRect(10 - armOffset, 7, 2, 4);
+  } else if (dir === 3) {
+    ctxLocal.fillRect(4 + armOffset, 4, 2, 4);
+    ctxLocal.fillRect(10 - armOffset, 4, 2, 4);
+  } else {
+    ctxLocal.fillRect(4, 7, 2, 4);
+    ctxLocal.fillRect(10, 7, 2, 4);
+  }
+}
+
+function updateNpcIdle(id) {
+  if (!npcIdleState[id]) npcIdleState[id] = { blink: 0, bob: 0, timer: 0 };
+  const s = npcIdleState[id];
+  s.timer++;
+  if (s.timer % 180 === 0) s.blink = 6;
+  if (s.blink > 0) s.blink--;
+  s.bob = Math.sin(s.timer / 20) * 1.5;
+}
+
+function showNpcEmotion(id, type) {
+  npcEmotion[id] = { type, timer: 60 };
+}
+function updateNpcEmotion(id) {
+  const e = npcEmotion[id];
+  if (!e) return;
+  e.timer--;
+  if (e.timer <= 0) delete npcEmotion[id];
+}
+
+/* Simple wandering AI with a "day" schedule */
+let worldTime = 0; // ticks
+function updateNpcWander(dt) {
+  worldTime += dt;
+  const isDay = (Math.floor(worldTime) % 40) < 20; // simple day/night toggle
+
+  for (const o of objects) {
+    if (o.type !== 'npc' && o.type !== 'shop') continue;
+    if (o.meta && o.meta.schedule === 'dayOnly' && !isDay) continue;
+
+    if (!npcWanderState[o.id]) npcWanderState[o.id] = { timer: 0 };
+    const s = npcWanderState[o.id];
+    s.timer += dt;
+
+    if (s.timer > 2.5) {
+      s.timer = 0;
+      const dirs = [
+        {dx:0,dy:-1,dir:3},
+        {dx:0,dy:1,dir:0},
+        {dx:-1,dy:0,dir:1},
+        {dx:1,dy:0,dir:2}
+      ];
+      const choice = dirs[rand(dirs.length)];
+      const nx = o.x + choice.dx;
+      const ny = o.y + choice.dy;
+      if (ny>=0 && ny<map.height && nx>=0 && nx<map.width && map.tiles[ny][nx] !== 1) {
+        o.x = nx; o.y = ny; o.dir = choice.dir;
+      }
+    }
+  }
+}
+
+/* Build NPC designs */
+buildNpcSprite('npc_oldman', {
+  skin: '#f1c27d',
+  hair: '#ffffff',
+  shirt: '#8b5a2b',
+  pants: '#3a2b1b'
+});
+buildNpcSprite('npc_merchant', {
+  skin: '#f1c27d',
+  hair: '#2b1b0b',
+  shirt: '#3a6cff',
+  pants: '#2b2b2b'
+});
+buildNpcSprite('npc_guard', {
+  skin: '#e0c090',
+  hair: '#000000',
+  shirt: '#5555aa',
+  pants: '#333366'
+});
+buildNpcSprite('npc_villager', {
+  skin: '#f1c27d',
+  hair: '#a0522d',
+  shirt: '#55aa55',
+  pants: '#3a2b1b'
+});
+buildNpcSprite('npc_wizard', {
+  skin: '#f1c27d',
+  hair: '#cccccc',
+  shirt: '#9933cc',
+  pants: '#552266'
+});
+buildNpcSprite('npc_child', {
+  skin: '#f1c27d',
+  hair: '#ffcc00',
+  shirt: '#ff6666',
+  pants: '#663300'
+});
+
+/* === Map, objects, events === */
+const map = { name:'town', width:20, height:12, tiles:[] };
+function makeEmpty(w,h,fill=0){ const t=[]; for(let y=0;y<h;y++){ const r=[]; for(let x=0;x<w;x++) r.push(fill); t.push(r);} return t; }
+map.tiles = makeEmpty(map.width,map.height,0);
+for(let x=0;x<map.width;x++){ map.tiles[0][x]=1; map.tiles[map.height-1][x]=1; }
+for(let y=0;y<map.height;y++){ map.tiles[y][0]=1; map.tiles[y][map.width-1]=1; }
+map.tiles[2][6]=2; map.tiles[2][7]=2; map.tiles[3][6]=2; map.tiles[3][7]=2;
+map.tiles[6][14]=7; map.tiles[6][15]=7;
+
+let objects = [
+  {id:'obj_old', x:12, y:3, type:'npc', meta:{name:'Old Man', sprite:'npc_oldman', color:'#ffd24d'}},
+  {id:'merchant_1', x:9, y:2, type:'shop', meta:{name:'Bob', sprite:'npc_merchant', color:'#7ad'}},
+  {id:'guard_1', x:5, y:5, type:'npc', meta:{name:'Guard', sprite:'npc_guard', schedule:'dayOnly'}},
+  {id:'villager_1', x:7, y:7, type:'npc', meta:{name:'Lina', sprite:'npc_villager'}},
+  {id:'wizard_1', x:3, y:3, type:'npc', meta:{name:'Sage', sprite:'npc_wizard'}},
+  {id:'child_1', x:15, y:4, type:'npc', meta:{name:'Kid', sprite:'npc_child'}},
+  {id:'door_forest', x:18, y:6, type:'door', meta:{to:'forest', x:2, y:2, color:'#ff9f43'}}
+];
+
+let events = {
+  'obj_old':[ {type:'dialog', text:"Old man: 'Beware the forest.'"} ],
+  'merchant_1':[ {type:'dialog', text:"Merchant: 'Welcome!'"}, {type:'script', code:'openMerchant(\"Bob\")'} ],
+  'guard_1':[ {type:'dialog', text:"Guard: 'I only patrol during the day.'"} ],
+  'villager_1':[ {type:'dialog', text:"Lina: 'Nice weather, huh?'" } ],
+  'wizard_1':[ {type:'dialog', text:"Sage: 'The world shifts with time...'" } ],
+  'child_1':[ {type:'dialog', text:"Kid: 'Catch me if you can!'" } ],
+  'door_forest':[ {type:'dialog', text:"You step through the gate..."}, {type:'teleport', map:'forest', x:2, y:2} ]
+};
+
+const maps = {
+  town: { name:'town', width:20, height:12, tiles: JSON.parse(JSON.stringify(map.tiles)) },
+  forest: { name:'forest', width:20, height:12, tiles: (function(){
+    const t = makeEmpty(20,12,0);
+    for(let y=0;y<12;y++){
+      for(let x=0;x<20;x++){
+        t[y][x] = (Math.random() < 0.12) ? 1 : 0;
+      }
+    }
+    for(let x=0;x<20;x++){ t[0][x]=1; t[11][x]=1; }
+    for(let y=0;y<12;y++){ t[y][0]=1; t[y][19]=1; }
+    t[2][2] = 0;
+    return t;
+  })() }
+};
+
+function loadMap(mapName, spawnX, spawnY){
+  if(!maps[mapName]) return console.warn('Map not found', mapName);
+  map.name = maps[mapName].name; map.width = maps[mapName].width; map.height = maps[mapName].height; map.tiles = JSON.parse(JSON.stringify(maps[mapName].tiles));
+  player.map = mapName; player.px = spawnX; player.py = spawnY; player.tx = spawnX; player.ty = spawnY;
+}
+
+/* === Player, party, inventory, PC === */
+let player = { map:'town', px:2, py:2, tx:2, ty:2, dir:0, moving:false, frame:0, speed:6, hp:30, maxHp:30 };
+function newCreature(name,level,maxHp,atk,def,moves){ return { name, level, maxHp, hp:maxHp, atk, def, moves: moves||[], status:null, xp:0 }; }
+let party = [ newCreature("HeroMon",5,30,8,5,[{name:"Tackle",power:6,accuracy:0.95,pp:35,maxPp:35}]) ];
+let inventory = { Potion:3, CaptureOrb:5 };
+let PC = [];
+let battle = null;
+
+/* === Audio helpers === */
+let audioCtx = null;
+function ensureAudio(){ if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+function playSfx(freq,type='square',dur=0.12,vol=0.12){
+  try{
+    ensureAudio();
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(vol,t+0.01); g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+    o.start(t); o.stop(t+dur+0.02);
+  }catch(e){ console.warn('SFX failed', e); }
+}
+function playStep(){ playSfx(880,'square',0.06,0.06); }
+function playAttack(){ playSfx(440,'sawtooth',0.14,0.12); }
+function playHit(){ playSfx(220,'triangle',0.12,0.12); }
+function playMenu(){ playSfx(660,'square',0.08,0.08); }
+function playCapture(){ try{ ensureAudio(); const t = audioCtx.currentTime; [440,660,880].forEach((f,i)=>{ const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.type='sine'; o.frequency.value=f; o.connect(g); g.connect(audioCtx.destination); const start = t + i*0.06; g.gain.setValueAtTime(0,start); g.gain.linearRampToValueAtTime(0.12, start+0.02); g.gain.exponentialRampToValueAtTime(0.001, start+0.18); o.start(start); o.stop(start+0.22); }); }catch(e){ console.warn('capture sfx failed', e); } }
+
+/* === Battle UI === */
+function drawBattle(){
+  if(!battle) return;
+  try{
+    const pad = 48;
+    ctx.fillStyle = "rgba(0,0,0,0.96)";
+    ctx.fillRect(pad, pad, canvas.width - pad*2, canvas.height - pad*2);
+
+    const ex = pad + 24, ey = pad + 24, ew = 360, eh = 220;
+    ctx.fillStyle = "#222"; ctx.fillRect(ex, ey, ew, eh);
+    ctx.strokeStyle = "#ffd24d"; ctx.strokeRect(ex, ey, ew, eh);
+    ctx.fillStyle = "#fff"; ctx.font = "20px monospace";
+    ctx.fillText(`${battle.enemy.name} (L${battle.enemy.level})`, ex + 12, ey + 30);
+
+    const hpX = ex + 12, hpY = ey + 50, hpW = ew - 24, hpH = 18;
+    const hpRatio = Math.max(0, (battle.enemy.hp || 0) / (battle.enemy.maxHp || 1));
+    ctx.fillStyle = "#333"; ctx.fillRect(hpX, hpY, hpW, hpH);
+    ctx.fillStyle = "#d9534f"; ctx.fillRect(hpX, hpY, Math.floor(hpW * hpRatio), hpH);
+    ctx.strokeStyle = "#000"; ctx.strokeRect(hpX, hpY, hpW, hpH);
+    ctx.fillStyle = "#fff"; ctx.font = "14px monospace";
+    ctx.fillText(`${Math.max(0,battle.enemy.hp)}/${battle.enemy.maxHp} HP`, hpX + 8, hpY + 14);
+
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(ex + ew - 80, ey + 120, 36, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#444"; ctx.beginPath(); ctx.arc(ex + ew - 80, ey + 120, 30, 0, Math.PI*2); ctx.fill();
+
+    const px = ex + ew + 24, py = ey, pw = 360, ph = 220;
+    ctx.fillStyle = "#222"; ctx.fillRect(px, py, pw, ph);
+    ctx.strokeStyle = "#ffd24d"; ctx.strokeRect(px, py, pw, ph);
+    ctx.fillStyle = "#fff"; ctx.font = "18px monospace";
+    ctx.fillText("Party", px + 12, py + 30);
+    for(let i=0;i<party.length;i++){
+      const p = party[i];
+      const oy = py + 50 + i*44;
+      ctx.fillStyle = (i===0) ? "#ffd24d" : "#fff";
+      ctx.fillText(`${p.name} L${p.level}`, px + 12, oy);
+      const phx = px + 12, phy = oy + 8, pHw = pw - 36, pHh = 12;
+      const pr = Math.max(0, p.hp / p.maxHp);
+      ctx.fillStyle = "#333"; ctx.fillRect(phx, phy, pHw, pHh);
+      ctx.fillStyle = "#5cb85c"; ctx.fillRect(phx, phy, Math.floor(pHw * pr), pHh);
+      ctx.strokeStyle = "#000"; ctx.strokeRect(phx, phy, pHw, pHh);
+      ctx.fillStyle = "#fff"; ctx.font = "12px monospace";
+      ctx.fillText(`${p.hp}/${p.maxHp}`, phx + 8, phy + 10);
+    }
+
+    const lx = pad + 24, ly = ey + eh + 12, lw = canvas.width - pad*2 - 48, lh = 120;
+    ctx.fillStyle = "#111"; ctx.fillRect(lx, ly, lw, lh);
+    ctx.strokeStyle = "#444"; ctx.strokeRect(lx, ly, lw, lh);
+    ctx.fillStyle = "#ddd"; ctx.font = "14px monospace";
+    const log = battle.log || [];
+    for(let i=0;i<Math.min(6,log.length);i++){
+      ctx.fillText(log[log.length - Math.min(6,log.length) + i], lx + 12, ly + 24 + i*18);
+    }
+
+    if(battle.menuOpen){
+      const mx = canvas.width - 420, my = canvas.height - 220, mw = 360, mh = 160;
+      ctx.fillStyle = "rgba(0,0,0,0.96)"; ctx.fillRect(mx, my, mw, mh);
+      ctx.strokeStyle = "#ffd24d"; ctx.strokeRect(mx, my, mw, mh);
+      ctx.fillStyle = "#fff"; ctx.font = "16px monospace";
+      const opts = battle.menuOptions || [];
+      for(let i=0;i<opts.length;i++){
+        const oy = my + 28 + i*30;
+        if(i === (battle.menuCursor||0)){
+          ctx.fillStyle = "#ffd24d";
+          ctx.fillText("> " + opts[i].label, mx + 18, oy);
+        } else {
+          ctx.fillStyle = "#fff";
+          ctx.fillText("  " + opts[i].label, mx + 18, oy);
+        }
+      }
+    }
+  }catch(e){ console.error('drawBattle error', e); }
+}
+
+/* === Menu, party, items, merchant, events, battle logic === */
+let gameMenu = { open:false, screen:'main', cursor:0 };
+function openGameMenu(){ gameMenu.open=true; gameMenu.screen='main'; gameMenu.cursor=0; playMenu(); }
+function closeGameMenu(){ gameMenu.open=false; }
+
+function drawGameMenu(){
+  if(!gameMenu.open) return;
+  const x=80,y=120,w=420,h=320;
+  ctx.fillStyle='rgba(0,0,0,0.95)'; ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle='#ffd24d'; ctx.strokeRect(x,y,w,h);
+  ctx.fillStyle='#fff'; ctx.font='18px monospace';
+  if(gameMenu.screen==='main'){
+    const opts=['Party','Items','PC','Close'];
+    for(let i=0;i<opts.length;i++) ctx.fillText((i===gameMenu.cursor?'> ':'  ')+opts[i], x+20, y+40 + i*34);
+  } else if(gameMenu.screen==='party'){
+    ctx.fillText('Party', x+20, y+36);
+    for(let i=0;i<party.length;i++){ const p=party[i]; ctx.fillText((i===gameMenu.cursor?'> ':'  ')+`${p.name} L${p.level} HP:${p.hp}/${p.maxHp}`, x+20, y+72 + i*28); }
+    ctx.fillText('Press X to back', x+20, y+h-24);
+  } else if(gameMenu.screen==='items'){
+    ctx.fillText('Items', x+20, y+36);
+    const keys = Object.keys(inventory);
+    if(keys.length===0) ctx.fillText('No items', x+20, y+72);
+    for(let i=0;i<keys.length;i++){ const k=keys[i]; ctx.fillText((i===gameMenu.cursor?'> ':'  ')+`${k} x${inventory[k]}`, x+20, y+72 + i*28); }
+    ctx.fillText('Press X to back', x+20, y+h-24);
+  }
+}
+
+function handleMenuInput(k){
+  if(!gameMenu.open) return false;
+  const screen = gameMenu.screen;
+  if(k==='arrowup'){ gameMenu.cursor = Math.max(0, gameMenu.cursor-1); playMenu(); return true; }
+  if(k==='arrowdown'){ if(screen==='main') gameMenu.cursor = Math.min(3, gameMenu.cursor+1); else if(screen==='party') gameMenu.cursor = Math.min(Math.max(0, party.length-1), gameMenu.cursor+1); else if(screen==='items') gameMenu.cursor = Math.min(Math.max(0, Object.keys(inventory).length-1), gameMenu.cursor+1); playMenu(); return true; }
+  if(k==='z'){
+    if(screen==='main'){ if(gameMenu.cursor===0){ gameMenu.screen='party'; gameMenu.cursor=0; } else if(gameMenu.cursor===1){ gameMenu.screen='items'; gameMenu.cursor=0; } else if(gameMenu.cursor===2){ alert(PC.length ? PC.map((c,i)=>`${i+1}. ${c.name} L${c.level}`).join('\n') : 'PC empty'); } else closeGameMenu(); }
+    else if(screen==='party'){ openPartyActions(gameMenu.cursor); }
+    else if(screen==='items'){ useItemFromMenu(gameMenu.cursor); }
+    playMenu(); return true;
+  }
+  if(k==='x'){ if(screen==='main') closeGameMenu(); else { gameMenu.screen='main'; gameMenu.cursor=0; } playMenu(); return true; }
+  return true;
+}
+
+function openPartyActions(index){
+  const p = party[index]; if(!p) return;
+  const choice = prompt(`Party member: ${p.name}\n1) Inspect\n2) Switch\n3) Heal (use Potion)\nEnter number:`);
+  if(choice==='1') alert(`${p.name}\nLevel ${p.level}\nHP ${p.hp}/${p.maxHp}\nXP ${p.xp}`);
+  else if(choice==='2'){ if(index===0) return alert('Already leader'); const tmp = party[0]; party[0]=party[index]; party[index]=tmp; alert(`${party[0].name} is now leader`); }
+  else if(choice==='3'){ if((inventory.Potion||0)<=0) return alert('No Potions'); inventory.Potion--; p.hp = Math.min(p.maxHp, p.hp+20); alert(`${p.name} healed 20 HP`); }
+}
+
+function useItemFromMenu(cursor){ const keys = Object.keys(inventory); if(keys.length===0) return alert('No items'); const item = keys[cursor]; if(!item) return; useItem(item, party[0]); }
+function useItem(name, target){ if((inventory[name]||0)<=0) return alert('No ' + name); if(name==='Potion'){ target.hp = Math.min(target.maxHp, target.hp+20); inventory[name]--; alert(target.name + ' healed 20 HP'); } else if(name==='CaptureOrb'){ if(battle) attemptCapture(); else { inventory[name]--; alert('Used a CaptureOrb but nothing happened'); } } else { inventory[name]--; alert('Used ' + name); } }
+
+function openMerchant(name){ const shop = { 'Potion':50, 'CaptureOrb':120 }; const keys = Object.keys(shop); const choice = prompt(name + " sells:\n" + keys.map((k,i)=>`${i+1}) ${k} - ${shop[k]} coins`).join('\n') + '\nEnter number to buy'); const idx = parseInt(choice,10)-1; if(isNaN(idx)||idx<0||idx>=keys.length) return; const item = keys[idx]; inventory[item] = (inventory[item]||0)+1; alert('Purchased 1 ' + item); }
+
+function runEventsFor(targetId){
+  const acts = events[targetId]; if(!Array.isArray(acts)) return;
+  let i=0;
+  function next(){
+    if(i>=acts.length) return;
+    const a=acts[i++];
+    if(a.type==='dialog'){
+      showNpcEmotion(targetId, "!");
+      openDialog(a.text, next);
+    } else if(a.type==='give'){
+      inventory[a.item] = (inventory[a.item]||0) + (a.qty||1); next();
+    } else if(a.type==='teleport'){
+      if(a.map) loadMap(a.map, a.x||player.px, a.y||player.py);
+      else { player.px=a.x; player.py=a.y; player.tx=a.x; player.ty=a.y; }
+      next();
+    } else if(a.type==='script' && a.code){
+      try{
+        if(a.code.startsWith('openMerchant')){ const m = a.code.match(/openMerchant\("([^"]+)"\)/); if(m) openMerchant(m[1]); }
+      }catch(e){ console.warn('script event failed', e); }
+      next();
+    } else next();
+  }
+  next();
+}
+
+/* === Battle logic === */
+function startWildEncounter(){
+  const pool=[ newCreature("Twiglet",3,18,4,2,[]), newCreature("Mudkin",4,24,6,3,[]) ];
+  const t=pool[rand(pool.length)];
+  const enemy=JSON.parse(JSON.stringify(t)); enemy.hp=enemy.maxHp;
+  battle={enemy,menuOpen:false,menuOptions:[],menuCursor:0,log:[]};
+  battle.log.push(`A wild ${enemy.name} appeared!`);
+  playMenu();
+}
+function handleBattleInput(k){ if(!battle) return; if(battle.menuOpen){ if(k==='arrowup'){ battle.menuCursor=(battle.menuCursor-1+battle.menuOptions.length)%battle.menuOptions.length; playMenu(); } else if(k==='arrowdown'){ battle.menuCursor=(battle.menuCursor+1)%battle.menuOptions.length; playMenu(); } else if(k==='z'){ const opt=battle.menuOptions[battle.menuCursor]; if(opt && opt.action) opt.action(); } else if(k==='x'){ battle.menuOpen=false; playMenu(); } return; } if(k==='z') openBattleMenu(); else if(k==='x') attemptRun(); }
+function openBattleMenu(){ if(!battle) return; battle.menuOpen=true; battle.menuOptions=[ {label:"Fight",action:()=>{battle.menuOpen=false;openMoveSelection();}}, {label:"Items",action:()=>{battle.menuOpen=false;openItemMenu();}}, {label:"Capture",action:()=>{battle.menuOpen=false;attemptCapture();}}, {label:"Run",action:()=>{battle.menuOpen=false;attemptRun();}} ]; battle.menuCursor=0; playMenu(); }
+function openMoveSelection(){ const actor=party[0]; if(!actor) return battle.log.push("No active creature."); battle.menuOpen=true; battle.menuOptions = actor.moves.map(m=>({label:`${m.name} (PP ${m.pp}/${m.maxPp})`, action: ()=> useMove(actor,m)})); battle.menuOptions.push({label:"Back", action: ()=> { battle.menuOpen=false; }}); battle.menuCursor=0; }
+function openItemMenu(){ battle.menuOpen=true; const opts=[]; for(const k in inventory) opts.push({label:`${k} x${inventory[k]}`, action: ()=> { useItem(k); }}); if(!opts.length) opts.push({label:"No items", action: ()=> { battle.menuOpen=false; }}); opts.push({label:"Back", action: ()=> { battle.menuOpen=false; }}); battle.menuOptions=opts; battle.menuCursor=0; }
+function useMove(actor,move){ if(!battle||!actor||!move) return; if((move.pp||0)<=0){ battle.log.push("No PP left!"); return; } if(Math.random() > (move.accuracy||1)){ move.pp=Math.max(0,(move.pp||0)-1); battle.log.push(`${actor.name} missed!`); enemyTurn(); return; } const crit=Math.random()<0.06; const base=(move.power||4)+actor.atk-(battle.enemy.def||0); const dmg=Math.max(1,Math.floor(base*(crit?1.5:1))); move.pp=Math.max(0,(move.pp||0)-1); battle.enemy.hp=Math.max(0,battle.enemy.hp-dmg); battle.log.push(`${actor.name} used ${move.name}! (-${dmg})`); playAttack(); if(battle.enemy.hp<=0){ battle.log.push(`${battle.enemy.name} fainted!`); setTimeout(()=>{ battle=null; },800); return; } setTimeout(()=>enemyTurn(),400); }
+function enemyTurn(){ if(!battle) return; const enemy=battle.enemy; const move=enemy.moves&&enemy.moves[0]?enemy.moves[0]:{name:'Struggle',power:4,accuracy:1,pp:999}; if(Math.random() > (move.accuracy||1)){ battle.log.push(`${enemy.name} missed!`); return; } const base=(move.power||4)+enemy.atk-(party[0].def||0); const dmg=Math.max(1,Math.floor(base)); party[0].hp=Math.max(0,party[0].hp-dmg); battle.log.push(`${enemy.name} used ${move.name}! (-${dmg})`); playHit(); if(party[0].hp<=0){ battle.log.push(`${party[0].name} fainted!`); setTimeout(()=>{ party[0].hp = party[0].maxHp; battle=null; },800); } }
+function attemptRun(){ if(!battle) return; if(Math.random()<0.6){ battle=null; openDialog("You ran away!"); playMenu(); } else openDialog("Couldn't escape!"); }
+function attemptCapture(){ if(!battle) return; const orb = inventory.CaptureOrb||0; if(orb<=0){ battle.log.push("No Capture Orbs."); return; } inventory.CaptureOrb=Math.max(0,orb-1); const hpRatio=battle.enemy.hp/battle.enemy.maxHp; const chance=clamp(0.2+(1-hpRatio)*0.6,0.05,0.95); battle.captureAnim={active:true,start:Date.now(),duration:1.2,success:Math.random()<chance}; playCapture(); setTimeout(()=>{ if(!battle) return; const success=battle.captureAnim.success; battle.captureAnim.active=false; if(success){ const newC=newCreature(battle.enemy.name,battle.enemy.level,battle.enemy.maxHp,battle.enemy.atk,battle.enemy.def,[]); if(party.length<6){ party.push(newC); battle.log.push(`${newC.name} added to party!`); } else { PC.push(newC); battle.log.push(`${newC.name} sent to PC.`); } setTimeout(()=>{ battle=null; },600); } else { battle.log.push("The creature broke free!"); setTimeout(()=>enemyTurn(),400); } }, Math.floor(battle.captureAnim.duration*1000)); }
+
+/* === Rendering loop === */
+function draw(){
+  try{
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    const camX = player.px * TILE - canvas.width/2 + TILE/2;
+    const camY = player.py * TILE - canvas.height/2 + TILE/2;
+    const palName = document.getElementById('palette').value || 'default';
+    const ts = recolorTileset(palName);
+    ctx.imageSmoothingEnabled = false;
+
+    for(let y=0;y<map.height;y++){
+      for(let x=0;x<map.width;x++){
+        const tileIndex = map.tiles[y][x] || 0;
+        const sx = x*TILE - camX, sy = y*TILE - camY;
+        const srcCol = tileIndex % TILESET_COLS, srcRow = Math.floor(tileIndex / TILESET_COLS);
+        ctx.drawImage(ts, srcCol*TILE_PIX, srcRow*TILE_PIX, TILE_PIX, TILE_PIX, sx, sy, TILE, TILE);
+      }
+    }
+
+    /* Draw NPCs and doors */
+    for(let o of objects){
+      const ox = o.x*TILE - camX + TILE/2;
+      const oy = o.y*TILE - camY + TILE/2;
+
+      if (o.type === 'npc' || o.type === 'shop') {
+        updateNpcIdle(o.id);
+        updateNpcEmotion(o.id);
+
+        const sheet = npcSheets[o.meta.sprite];
+        if (!sheet) continue;
+
+        const frame = Math.floor(player.frame) % 4;
+        const dir = o.dir || 0;
+        const sx = frame * FRAME_W;
+        const sy = dir * FRAME_H;
+        const idle = npcIdleState[o.id];
+        const bob = idle ? idle.bob : 0;
+
+        ctx.drawImage(
+          sheet,
+          sx, sy, FRAME_W, FRAME_H,
+          ox - FRAME_W, oy - FRAME_H + bob,
+          FRAME_W * 2, FRAME_H * 2
+        );
+
+        const emo = npcEmotion[o.id];
+        if (emo) {
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.arc(ox, oy - 60, 12, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#000";
+          ctx.font = "14px monospace";
+          ctx.fillText(
+            emo.type === "!" ? "!" :
+            emo.type === "?" ? "?" :
+            emo.type === "heart" ? "♥" : "",
+            ox - 4, oy - 56
+          );
+        }
+      } else if (o.type === 'door') {
+        ctx.fillStyle = o.meta && o.meta.color ? o.meta.color : '#ff9f43';
+        ctx.fillRect(ox - 16, oy - 24, 32, 48);
+      }
+    }
+
+    const dir = player.dir, frame = Math.floor(player.frame) % 4;
+    const pxScreen = player.px*TILE - camX + (TILE - FRAME_W*2)/2;
+    const pyScreen = player.py*TILE - camY + (TILE - FRAME_H*2)/2;
+    ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.fillRect(pxScreen + FRAME_W*2*0.15, pyScreen + FRAME_H*2 - 6, FRAME_W*2*0.7, 8);
+    ctx.drawImage(sheetImage, frame*FRAME_W, dir*FRAME_H, FRAME_W, FRAME_H, pxScreen, pyScreen, FRAME_W*2, FRAME_H*2);
+
+    ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(12,12,520,84);
+    ctx.fillStyle="#fff"; ctx.font="14px monospace";
+    ctx.fillText('Map: ' + player.map, 20, 36);
+    ctx.fillText('Pos: ' + Math.round(player.px) + ',' + Math.round(player.py), 20, 56);
+    ctx.fillText('Party: ' + party.map(p=>p.name).join(', '), 20, 76);
+
+    drawGameMenu();
+    if(battle) drawBattle();
+    if(dialog.open){
+      const boxX = 60, boxY = canvas.height-200, boxW = canvas.width-120, boxH = 160;
+      ctx.fillStyle="rgba(0,0,0,0.95)"; ctx.fillRect(boxX,boxY,boxW,boxH);
+      ctx.strokeStyle="#ffd24d"; ctx.strokeRect(boxX,boxY,boxW,boxH);
+
+      // simple portrait area on left
+      ctx.fillStyle="#222"; ctx.fillRect(boxX+12, boxY+12, 80, 80);
+      ctx.strokeStyle="#555"; ctx.strokeRect(boxX+12, boxY+12, 80, 80);
+
+      ctx.fillStyle="#fff"; ctx.font="16px monospace";
+      wrapText(dialog.text||'', boxX+110, boxY+40, boxW-140, 22);
+      ctx.fillStyle="#aaa"; ctx.font="12px monospace"; ctx.fillText('Press Z to close', canvas.width-180, canvas.height-40);
+    }
+  }catch(e){ reportError(e); }
+  requestAnimationFrame(draw);
+}
+
+function wrapText(text,x,y,maxW,lineH){
+  ctx.fillStyle='#fff';
+  const words = String(text).split(' ');
+  let line = '';
+  for(let n=0;n<words.length;n++){
+    const test = line + words[n] + ' ';
+    const m = ctx.measureText(test);
+    if(m.width > maxW && n > 0){ ctx.fillText(line, x, y); line = words[n] + ' '; y += lineH; } else line = test;
+  }
+  ctx.fillText(line, x, y);
+}
+
+/* === Update loop === */
+let lastTime = performance.now();
+function update(now){
+  const dt = Math.min(0.05, (now - lastTime)/1000);
+  lastTime = now;
+
+  if(player.moving){
+    const dx = player.tx - player.px, dy = player.ty - player.py;
+    const dist = Math.hypot(dx,dy);
+    if(dist < 0.001){ player.px = player.tx; player.py = player.ty; player.moving = false; }
+    else {
+      const step = player.speed * dt;
+      if(step >= dist){ player.px = player.tx; player.py = player.ty; player.moving = false; }
+      else { player.px += dx/dist * step; player.py += dy/dist * step; }
+    }
+    player.frame += 8 * dt;
+  } else player.frame += 1 * dt;
+
+  updateNpcWander(dt);
+  requestAnimationFrame(update);
+}
+
+/* === Dialog and Input === */
+let dialog = { open:false, text:'', onClose:null };
+function openDialog(text, onClose){ dialog.open=true; dialog.text=String(text||''); dialog.onClose = typeof onClose === 'function' ? onClose : null; }
+
+const keyState = {};
+window.addEventListener('keydown', e=>{
+  const k = e.key.toLowerCase();
+  keyState[k] = true;
+  if(['arrowup','arrowdown','arrowleft','arrowright'].includes(e.key.toLowerCase())) e.preventDefault();
+  if(handleMenuInput(k)) return;
+  if(dialog.open){ if(k==='z'){ dialog.open=false; if(dialog.onClose) try{ dialog.onClose(); }catch(e){} dialog.onClose=null; } return; }
+  if(battle){ handleBattleInput(k); return; }
+  handleKey(k);
+});
+window.addEventListener('keyup', e=> keyState[e.key.toLowerCase()] = false );
+
+function handleKey(k){
+  if(k==='arrowup') requestMove(0,-1,3);
+  if(k==='arrowdown') requestMove(0,1,0);
+  if(k==='arrowleft') requestMove(-1,0,1);
+  if(k==='arrowright') requestMove(1,0,2);
+  if(k==='z') interact();
+  if(k==='x'){ if(!gameMenu.open) openGameMenu(); else handleMenuInput('x'); }
+  if(k==='m') toggleEditor();
+  if(k==='p') saveGame();
+  if(k==='l') loadGame();
+}
+
+/* Movement + encounters */
+function requestMove(dx,dy,dir){
+  if(dialog.open) return;
+  if(player.moving) return;
+  const nx = Math.round(player.px) + dx, ny = Math.round(player.py) + dy;
+  if(ny < 0 || ny >= map.height || nx < 0 || nx >= map.width) return;
+  const tile = map.tiles[ny][nx];
+  if(tile === 1) return;
+  player.tx = nx; player.ty = ny; player.dir = dir; player.moving = true;
+  playStep();
+  setTimeout(postMove, 220);
+}
+
+function postMove(){
+  const obj = objects.find(o => o.x === player.tx && o.y === player.ty);
+  if(obj && events[obj.id]){ runEventsFor(obj.id); return; }
+  const tile = map.tiles[player.ty][player.tx];
+  if(tile === 0 && Math.random() < 0.05) startWildEncounter();
+}
+
+/* Interaction: NPC faces player + emotion */
+function interact(){
+  const px = Math.round(player.px), py = Math.round(player.py);
+  const facingOffsets = [
+    {dx:0,dy:1},  // down
+    {dx:-1,dy:0}, // left
+    {dx:1,dy:0},  // right
+    {dx:0,dy:-1}  // up
+  ];
+  const off = facingOffsets[player.dir] || facingOffsets[0];
+  const tx = px + off.dx, ty = py + off.dy;
+  const obj = objects.find(o => o.x === tx && o.y === ty);
+  if(obj){
+    if (obj.type === 'npc' || obj.type === 'shop') {
+      const dx = player.tx - obj.x;
+      const dy = player.ty - obj.y;
+      if (Math.abs(dx) > Math.abs(dy)) obj.dir = dx > 0 ? 1 : 2;
+      else obj.dir = dy > 0 ? 0 : 3;
+      showNpcEmotion(obj.id, "!");
+    }
+    if(events[obj.id]) runEventsFor(obj.id);
+  }
+}
+
+/* === Editor, events UI === */
+let editorMode=false, currentTool='paint', selectedTile=0, selectedObjectId=null;
+document.getElementById('editorBtn').addEventListener('click', ()=> toggleEditor());
+document.getElementById('toolPaint').addEventListener('click', ()=> currentTool='paint');
+document.getElementById('toolErase').addEventListener('click', ()=> currentTool='erase');
+document.getElementById('tileIndex').addEventListener('change', e=> selectedTile = clamp(parseInt(e.target.value||'0',10),0,7));
+function toggleEditor(){ editorMode = !editorMode; alert('Editor ' + (editorMode ? 'on' : 'off')); }
+
+let mouseDown=false;
+canvas.addEventListener('pointerdown', e=>{ mouseDown=true; handleCanvasPointer(e, e.button===2 ? 'right' : 'left'); });
+canvas.addEventListener('pointermove', e=>{ if(mouseDown && currentTool==='paint') handleCanvasPointer(e,'left'); });
+canvas.addEventListener('pointerup', ()=> mouseDown=false);
+canvas.addEventListener('contextmenu', e=> e.preventDefault());
+
+function screenToTile(mx,my){
+  const rect = canvas.getBoundingClientRect();
+  const cx = mx - rect.left, cy = my - rect.top;
+  const camX = player.px * TILE - canvas.width/2 + TILE/2, camY = player.py * TILE - canvas.height/2 + TILE/2;
+  const tx = Math.floor((cx + camX) / TILE), ty = Math.floor((cy + camY) / TILE);
+  return {tx,ty};
+}
+
+function handleCanvasPointer(ev, button){
+  if(!editorMode) return;
+  const p = screenToTile(ev.clientX, ev.clientY);
+  const tx = p.tx, ty = p.ty;
+  if(tx<0||ty<0||tx>=map.width||ty>=map.height) return;
+  if(button==='right'){
+    const obj = objects.find(o=>o.x===tx && o.y===ty);
+    if(obj){ selectedObjectId = obj.id; document.getElementById('eventTarget').value = obj.id; document.getElementById('eventScript').value = JSON.stringify(events[obj.id]||[], null, 2); }
+    else { const tid = `tile_${tx}_${ty}`; selectedObjectId = tid; document.getElementById('eventTarget').value = tid; document.getElementById('eventScript').value = JSON.stringify(events[tid]||[], null, 2); }
+    return;
+  }
+  if(currentTool==='paint') map.tiles[ty][tx] = selectedTile;
+  else if(currentTool==='erase'){
+    const idx = objects.findIndex(o=>o.x===tx && o.y===ty);
+    if(idx>=0){
+      const rem = objects.splice(idx,1)[0];
+      delete events[rem.id];
+      if(selectedObjectId===rem.id){
+        selectedObjectId=null;
+        document.getElementById('eventTarget').value='';
+        document.getElementById('eventScript').value='';
+      }
+    } else map.tiles[ty][tx]=0;
+  }
+}
+
+document.getElementById('saveEvent').addEventListener('click', ()=>{
+  const id=document.getElementById('eventTarget').value;
+  if(!id) return alert('Select a target');
+  try{
+    const actions=JSON.parse(document.getElementById('eventScript').value||'[]');
+    events[id]=actions;
+    alert('Event saved');
+  }catch(e){ alert('Invalid JSON'); }
+});
+document.getElementById('clearEvent').addEventListener('click', ()=>{
+  const id=document.getElementById('eventTarget').value;
+  if(!id) return;
+  delete events[id];
+  document.getElementById('eventScript').value='';
+  alert('Event cleared');
+});
+
+/* === Save/load and PC === */
+document.getElementById('saveBtn').addEventListener('click', saveGame);
+document.getElementById('loadBtn').addEventListener('click', loadGame);
+function saveGame(){
+  try{
+    const save={player,party,inventory,map,objects,events,PC};
+    localStorage.setItem('retro_rpg_save', JSON.stringify(save));
+    openDialog('Game saved.');
+  }catch(e){ openDialog('Save failed.'); }
+}
+function loadGame(){
+  const s=localStorage.getItem('retro_rpg_save');
+  if(!s) return openDialog('No save found.');
+  try{
+    const save=JSON.parse(s);
+    Object.assign(player, save.player||{});
+    party = save.party || party;
+    inventory = save.inventory || inventory;
+    if(save.map) map.tiles = save.map.tiles || map.tiles;
+    objects = save.objects || objects;
+    events = save.events || events;
+    PC = save.PC || PC;
+    openDialog('Game loaded.');
+  }catch(e){ openDialog('Load failed.'); }
+}
+document.getElementById('pcBtn').addEventListener('click', ()=> {
+  alert(PC.length ? PC.map((c,i)=>`${i+1}. ${c.name} L${c.level}`).join('\n') : 'PC is empty');
+});
+
+/* === Music controls === */
+let musicVol = 0.18;
+const musicState = { playing:false, tempo:120, currentStep:0, schedulerId:null, sfxVol:0.9 };
+const musicPattern = [{lead:'E4'},{lead:null},{lead:'G4'},{lead:null}];
+function noteToFreq(note){ if(typeof note==='number') return 440*Math.pow(2,(note-69)/12); const mapN={C:0,'C#':1,D:2,'D#':3,E:4,F:5,'F#':6,G:7,'G#':8,A:9,'A#':10,B:11}; const m=(note||'A4').match(/^([A-G]#?)(\d)$/); if(!m) return 440; const key=m[1],oct=parseInt(m[2],10); const semis = mapN[key] + (oct+1)*12; return 440*Math.pow(2,(semis-69)/12); }
+function scheduleLead(freq,t){ try{ ensureAudio(); const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.type='square'; o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination); g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.08*musicVol,t+0.01); o.start(t); o.stop(t+0.18); }catch(e){} }
+let nextNoteTime = 0;
+function scheduler(){ if(!musicState.playing) return; while(nextNoteTime < audioCtx.currentTime + 0.2){ const step = musicState.currentStep % musicPattern.length; const data = musicPattern[step]; const t = nextNoteTime; if(data.lead) scheduleLead(noteToFreq(data.lead), t); const secondsPerBeat = 60.0 / musicState.tempo; nextNoteTime += secondsPerBeat / 2; musicState.currentStep++; } musicState.schedulerId = setTimeout(scheduler, 80); }
+function startMusic(){ try{ ensureAudio(); if(musicState.playing) return; musicState.playing = true; musicState.currentStep = 0; nextNoteTime = audioCtx.currentTime + 0.05; scheduler(); }catch(e){ console.warn('startMusic failed', e); } }
+function stopMusic(){ musicState.playing = false; if(musicState.schedulerId){ clearTimeout(musicState.schedulerId); musicState.schedulerId = null; } }
+function setTempo(bpm){ musicState.tempo = bpm; }
+document.getElementById('musicPlay').addEventListener('click', ()=> { try{ ensureAudio(); startMusic(); }catch(e){ alert('Audio unavailable'); } });
+document.getElementById('musicPause').addEventListener('click', ()=> stopMusic());
+document.getElementById('musicMute').addEventListener('click', ()=> stopMusic());
+document.getElementById('tempo').addEventListener('input', e=> setTempo(parseInt(e.target.value,10)));
+document.getElementById('musicVol').addEventListener('input', e=> musicVol = parseFloat(e.target.value));
+document.getElementById('sfxVol').addEventListener('input', e=> musicState.sfxVol = parseFloat(e.target.value));
+document.addEventListener('pointerdown', ()=> { try{ ensureAudio(); }catch(e){} }, {once:true});
+
+/* === Start loops === */
+player.px = player.tx; player.py = player.ty;
+requestAnimationFrame(update);
+requestAnimationFrame(draw);
+report('NPC complete demo initialized');
+</script>
+</body>
+</html>
