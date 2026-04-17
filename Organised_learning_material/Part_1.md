@@ -75,3 +75,8 @@ An exemplary map of what we want to recreate (crudely) from the initial version.
 
 
 ```
+
+What we should have prepared by the end of this part are : 
+
+- a well defined initial prompt
+- well devised charts (UML/Flowcharts etc) and design materials (User Stories, Use Case, PACT analysics, MOSCOW analysis etc) for the demo features
