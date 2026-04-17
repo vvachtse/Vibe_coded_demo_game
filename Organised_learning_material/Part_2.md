@@ -63,3 +63,163 @@ Having clarified the benefits of using HTML/JS for the initial generation of the
 Those issues will be more in depth tackled during  Part 3, when we will focus on LO3 and LO4.
 
 The initial part of this step is requesting from the LLM to generate the initial code, based on our well defined initial prompt. 
+
+After generating the initial HTML code, we will generate an HTML file and run it. The process after generating it is the following : 
+
+1. We test all functions that we requested
+2. We assess their functionality
+3. We request from the LLM to amend them 
+
+When doing so, the LLMs in order to reduce the usege of tokens, will most probably try to amend only the relevant code. This is a great opportunity for us to slowly start understanding the different objects generated and the functions they represent.
+
+Let's see for example the given demo we have. It is impossible to return to the initial map after you depart. Asking CGPT to solve this issue it points out that problem lies in the following objects : 
+
+``` {id:'door_forest', x:18, y:6, type:'door', meta:{to:'forest', x:2, y:2}} ```
+
+and specifically the event (function) 
+
+```
+'door_forest':[
+  {type:'dialog', text:"You step through the gate..."},
+  {type:'teleport', map:'forest', x:2, y:2}
+]
+
+```
+
+By studying those two snippets we can infer the following :
+
+A. We see how an enviroment object (door) is proped up
+B. We see how we may add to the door object text, that appears when the teleport event takes place 
+
+The LLM suggests to add a similar object on the forest map in order to solve our problem. The second suggestion is t upgrade the general architecture of the maps and the teleport process by importing both doors with a dictionary :
+
+```
+
+const mapObjects = {
+  town: [
+    {id:'door_forest', x:18, y:6, type:'door', meta:{to:'forest', x:2, y:2}}
+  ],
+  forest: [
+    {id:'door_town', x:2, y:2, type:'door', meta:{to:'town', x:18, y:6}}
+  ]
+};
+
+```
+
+and 
+
+```
+
+function loadMap(mapName, spawnX, spawnY){
+  if(!maps[mapName]) return;
+
+  map.name = maps[mapName].name;
+  map.width = maps[mapName].width;
+  map.height = maps[mapName].height;
+  map.tiles = JSON.parse(JSON.stringify(maps[mapName].tiles));
+
+  objects = mapObjects[mapName] || [];
+
+  player.map = mapName;
+  player.px = spawnX;
+  player.py = spawnY;
+  player.tx = spawnX;
+  player.ty = spawnY;
+}
+
+```
+
+Those more extensive fixes give us a better insight on the manner the map objects are functioning. This allows for us to start to read different parts of the code and start to understand their structure. 
+
+There are 2 interesting steps to take now. The first is to request for a visualisation of the different classes/objects/events that the code outlines. We will also request from the LLM to extensively comment on the code it has generated.
+
+For example here we have one of the UML charts designed by the LLM in ordeer to explain the code's philosphy and how the objects within it interact. 
+
+```
+
++-------------------+
+|      Game         |
++-------------------+
+| player            |
+| map               |
+| objects[]         |
+| events{}          |
+| party[]           |
+| inventory{}       |
+| PC[]              |
+| battle            |
++-------------------+
+| update()          |
+| draw()            |
+| handleInput()     |
++-------------------+
+         |
+         | uses
+         v
++-------------------+
+|      Player       |
++-------------------+
+| map               |
+| px, py            |
+| tx, ty            |
+| dir               |
+| moving            |
+| frame             |
+| speed             |
+| hp, maxHp         |
++-------------------+
+| requestMove()     |
+| interact()        |
++-------------------+
+
+         |
+         | interacts with
+         v
+
++-------------------+
+|       Map         |
++-------------------+
+| name              |
+| width, height     |
+| tiles[][]         |
++-------------------+
+| loadMap()         |
++-------------------+
+
+         |
+         | contains
+         v
+
++-------------------+
+|      Object       |
++-------------------+
+| id                |
+| x, y              |
+| type              |
+| meta{}            |
++-------------------+
+| (npc, door, shop) |
++-------------------+
+
+         |
+         | triggers
+         v
+
++-------------------+
+|      Event        |
++-------------------+
+| type              |
+| text              |
+| map, x, y         |
+| code              |
++-------------------+
+| runEventsFor()    |
++-------------------+
+
+```
+
+As we can see the game centers around the player object. The player objects interacts with the enviroment and interacts with different enviroment objects, triggering events. The non visual aspects like party, inventory , menus etc are elements that appear to exist within the set up but do not appear to be monitored when not in use. This is both a way for the game to reduce memory required for it to run, but also it is endemic to the enviroment. For a game oriented enviroment, monitoring those values (not necessarily having them loaded all the time) could be beneficial if we want to include special events, animations etc. However this level of sophistication will be studied later.
+
+# Requesting comments for a large html file
+
+This will strain the LLM a lot. It is suggested to request the commenting for the initial creation. This will allow for us to study the different pieces of code faster and for simpler structures. After an in-depth study of the code generated we will start to slowly request for the implementation of the required featured, as outlined from the design documentation.
