@@ -4,6 +4,13 @@ This repository includes a small game inspired by the original Pokemon and Final
 # Status
 Monthly updates
 
+Updates planned for May : 
+1. Add the analysis materials
+2. Finish Part_3.md
+
+Updates planned for June : 
+-> Optimise the Pygame version
+
 # Tools_used 
 - Copilot & ChatGPT
 - Microsoft edge ( ideally you want to try multiple browsers)
