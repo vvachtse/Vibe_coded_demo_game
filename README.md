@@ -5,11 +5,14 @@ This repository includes a small game inspired by the original Pokemon and Final
 Monthly updates
 
 Updates planned for May : 
-1. Add the analysis materials
-2. Finish Part_3.md
+
+-- Delayed due to bad health --
 
 Updates planned for June : 
--> Optimise the Pygame version
+
+1. Add the analysis materials
+2. Finish Part_3.md
+3. Optimise the Pygame version
 
 # Tools_used 
 - Copilot & ChatGPT
